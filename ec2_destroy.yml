@@ -1,0 +1,74 @@
+- name: Destroy EC2 infrastructure
+  hosts: localhost
+  gather_facts: false
+  vars:
+    project: pwa
+    env: prod
+    name_prefix: "{{ project }}_{{ env }}"
+    aws_region: us-west-2
+    vpc_cidr: 10.0.0.0/16
+  tasks:
+    - name: Destroy EC2 instances (may take >30s)
+      amazon.aws.ec2_instance:
+        region: "{{ aws_region }}"
+        filters:
+          "tag:Name": "{{ name_prefix }}_*"
+        state: absent
+
+    - name: Get VPC info
+      ansible.builtin.ec2_vpc_net_info:
+        region: "{{ aws_region }}"
+        filters:
+          "tag:Name": "{{ name_prefix }}_vpc"
+      register: vpc_info
+
+    - name: Destroy internet gateway
+      ansible.builtin.ec2_vpc_igw:
+        region: "{{ aws_region }}"
+        vpc_id: "{{ vpc_info.vpcs[0].id }}"
+        tags:
+          Name: "{{ name_prefix }}_igw"
+        state: absent
+
+    - name: Destroy security group
+      amazon.aws.ec2_security_group:
+        region: "{{ aws_region }}"
+        vpc_id: "{{ vpc_info.vpcs[0].id }}"
+        name: "{{ name_prefix }}_sg"
+        state: absent
+
+    - name: Get public route table info
+      ansible.builtin.ec2_vpc_route_table_info:
+        region: "{{ aws_region }}"
+        filters:
+          "tag:Name": "{{ name_prefix }}_public_route_table"
+      register: route_table_info
+
+    - name: Destroy public route table
+      ansible.builtin.ec2_vpc_route_table:
+        region: "{{ aws_region }}"
+        vpc_id: "{{ vpc_info.vpcs[0].id }}"
+        route_table_id: "{{ route_table_info.route_tables[0].id }}"
+        lookup: id
+        state: absent
+
+    - name: Get subnet info
+      ansible.builtin.ec2_vpc_subnet_info:
+        region: "{{ aws_region }}"
+        filters:
+          vpc-id: "{{ vpc_info.vpcs[0].id }}"
+      register: subnet_info
+
+    - name: Destroy subnets
+      ansible.builtin.ec2_vpc_subnet:
+        region: "{{ aws_region }}"
+        vpc_id: "{{ vpc_info.vpcs[0].id }}"
+        cidr: "{{ item.cidr_block }}"
+        state: absent
+      loop: "{{ subnet_info.subnets }}"
+
+    - name: Destroy VPC
+      amazon.aws.ec2_vpc_net:
+        region: "{{ aws_region }}"
+        vpc_id: "{{ vpc_info.vpcs[0].id }}"
+        state: absent
